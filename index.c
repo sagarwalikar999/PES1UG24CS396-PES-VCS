@@ -135,10 +135,29 @@ int index_status(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_load(Index *index) {
-    // TODO: Implement index loading
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    index->count = 0;
+    FILE *f = fopen(INDEX_FILE, "r");
+    if (!f) return 0; 
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f) && index->count < MAX_INDEX_ENTRIES) {
+        IndexEntry *ent = &index->entries[index->count];
+        char hex[HASH_HEX_SIZE + 1];
+        unsigned long long mtime;
+        
+        if (sscanf(line, "%o %64s %llu %u %511[^\n]", 
+                   &ent->mode, hex, &mtime, &ent->size, ent->path) == 5) {
+            ent->mtime_sec = (uint64_t)mtime;
+            hex_to_hash(hex, &ent->hash);
+            index->count++;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+static int compare_index_entries(const void *a, const void *b) {
+    return strcmp(((const IndexEntry *)a)->path, ((const IndexEntry *)b)->path);
 }
 
 // Save the index to .pes/index atomically.
@@ -151,12 +170,47 @@ int index_load(Index *index) {
 //   - rename                           : atomically moving the temp file over the old index
 //
 // Returns 0 on success, -1 on error.
+// Save the index to .pes/index atomically.
 int index_save(const Index *index) {
-    // TODO: Implement atomic index saving
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+    // Heap-allocate to prevent stack overflow (Index struct is ~5.6MB)
+    Index *sorted = malloc(sizeof(Index));
+    if (!sorted) return -1;
+
+    *sorted = *index;
+    qsort(sorted->entries, sorted->count, sizeof(IndexEntry), compare_index_entries);
+
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", INDEX_FILE);
+    
+    FILE *f = fopen(tmp_path, "w");
+    if (!f) {
+        free(sorted);
+        return -1;
+    }
+
+    for (int i = 0; i < sorted->count; i++) {
+        const IndexEntry *ent = &sorted->entries[i];
+        char hex[HASH_HEX_SIZE + 1];
+        hash_to_hex(&ent->hash, hex);
+        fprintf(f, "%o %s %llu %u %s\n", 
+                ent->mode, hex, (unsigned long long)ent->mtime_sec, ent->size, ent->path);
+    }
+
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    if (rename(tmp_path, INDEX_FILE) != 0) {
+        unlink(tmp_path);
+        free(sorted);
+        return -1;
+    }
+    
+    free(sorted);
+    return 0;
 }
+// Forward decl
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
 
 // Stage a file for the next commit.
 //
@@ -168,8 +222,41 @@ int index_save(const Index *index) {
 //
 // Returns 0 on success, -1 on error.
 int index_add(Index *index, const char *path) {
-    // TODO: Implement file staging
-    // (See Lab Appendix for logical steps)
-    (void)index; (void)path;
-    return -1;
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        fprintf(stderr, "error: could not stat '%s'\n", path);
+        return -1;
+    }
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    uint8_t *buf = malloc(st.st_size);
+    if (st.st_size > 0 && !buf) { fclose(f); return -1; }
+    
+    if (st.st_size > 0 && fread(buf, 1, st.st_size, f) != (size_t)st.st_size) {
+        free(buf); fclose(f); return -1;
+    }
+    fclose(f);
+
+    ObjectID blob_id;
+    if (object_write(OBJ_BLOB, buf, st.st_size, &blob_id) != 0) {
+        free(buf); return -1;
+    }
+    free(buf);
+
+    IndexEntry *ent = index_find(index, path);
+    if (!ent) {
+        if (index->count >= MAX_INDEX_ENTRIES) return -1;
+        ent = &index->entries[index->count++];
+        strncpy(ent->path, path, sizeof(ent->path) - 1);
+        ent->path[sizeof(ent->path) - 1] = '\0';
+    }
+
+    ent->mode = S_ISDIR(st.st_mode) ? 0040000 : (st.st_mode & S_IXUSR ? 0100755 : 0100644);
+    ent->hash = blob_id;
+    ent->mtime_sec = st.st_mtime;
+    ent->size = st.st_size;
+
+    return index_save(index);
 }
