@@ -118,60 +118,17 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 
 #include "index.h"
 
+// Forward declaration of object store write function
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
 
+// Recursive helper to build subtrees
 static int build_tree_level(IndexEntry *entries, int count, int depth, ObjectID *out_id) {
     Tree tree;
     tree.count = 0;
-
-    int i = 0;
-    while (i < count) {
-        const char *rel_path = entries[i].path + depth;
-        const char *slash = strchr(rel_path, '/');
-
-        if (!slash) {
-            TreeEntry *te = &tree.entries[tree.count++];
-            te->mode = entries[i].mode;
-            te->hash = entries[i].hash;
-            strcpy(te->name, rel_path);
-            i++;
-        } else {
-            int dir_len = slash - rel_path;
-            char dir_name[256];
-            strncpy(dir_name, rel_path, dir_len);
-            dir_name[dir_len] = '\0';
-
-            int j = i;
-            while (j < count) {
-                const char *next_path = entries[j].path + depth;
-                if (strncmp(next_path, dir_name, dir_len) != 0 || next_path[dir_len] != '/') {
-                    break;
-                }
-                j++;
-            }
-
-            ObjectID subtree_id;
-            if (build_tree_level(entries + i, j - i, depth + dir_len + 1, &subtree_id) != 0) {
-                return -1;
-            }
-
-            TreeEntry *te = &tree.entries[tree.count++];
-            te->mode = MODE_DIR;
-            te->hash = subtree_id;
-            strcpy(te->name, dir_name);
-
-            i = j; 
-        }
-    }
     
-    // Serialize and write the compiled tree for this layer to the object store
-    void *data;
-    size_t len;
-    if (tree_serialize(&tree, &data, &len) != 0) return -1;
-
-    int rc = object_write(OBJ_TREE, data, len, out_id);
-    free(data);
-    return rc;
+    // Stub for Commit 1
+    (void)entries; (void)count; (void)depth; (void)out_id;
+    return -1;
 }
 
 // Build a tree hierarchy from the current index and write all tree
@@ -190,5 +147,6 @@ static int build_tree_level(IndexEntry *entries, int count, int depth, ObjectID 
 int tree_from_index(ObjectID *id_out) {
     Index idx;
     if (index_load(&idx) != 0) return -1;
+    
     return build_tree_level(idx.entries, idx.count, 0, id_out);
 }
